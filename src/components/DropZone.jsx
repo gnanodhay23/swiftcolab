@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { X, CheckCircle, AlertCircle, Link } from 'lucide-react';
 
-const DropZone = ({ title, apps, onDrop }) => {
+const DropZone = ({ title, apps, onDrop, onRemove, connectionStatus = {}, onConnect }) => {
     const [isOver, setIsOver] = useState(false);
 
     const handleDragOver = (e) => {
@@ -16,6 +17,15 @@ const DropZone = ({ title, apps, onDrop }) => {
     const handleDrop = (e) => {
         setIsOver(false);
         onDrop(e);
+    };
+
+    const handleConnect = (e, app) => {
+        e.stopPropagation();
+        const status = connectionStatus[app.id] || connectionStatus[app.name?.toLowerCase()];
+        if (onConnect) {
+            // Pass authUrl if available, or null if app needs config (has error)
+            onConnect(app, status?.authUrl || null);
+        }
     };
 
     const borderColor = isOver
@@ -46,23 +56,81 @@ const DropZone = ({ title, apps, onDrop }) => {
                 ) : (
                     <div className="grid grid-cols-3 md:grid-cols-4 gap-4">
                         <AnimatePresence>
-                            {apps.map((app) => (
-                                <motion.div
-                                    key={app.id}
-                                    initial={{ opacity: 0 }}
-                                    animate={{ opacity: 1 }}
-                                    exit={{ opacity: 0 }}
-                                    layout
-                                    className="aspect-square rounded-xl bg-white/25 backdrop-blur-sm border border-white/30 flex flex-col items-center justify-center p-3 gap-2 hover:shadow-lg hover:bg-white/30 transition-all cursor-pointer relative group"
-                                >
-                                    <img src={app.logo} alt={app.name} className="w-full h-full object-contain pointer-events-none" />
+                            {apps.map((app) => {
+                                const appKey = app.id || app.name?.toLowerCase();
+                                const status = connectionStatus[appKey];
+                                const isConnected = status?.connected === true;
+                                const isChecking = status === undefined;
+                                const hasAuthUrl = status?.authUrl;
+                                const hasError = status?.error; // App needs config (like API key)
+                                const requiresCustomModal = status?.requiresCustomModal; // Custom integration (like Frappe)
 
-                                    {/* Tooltip on hover in dropzone too */}
-                                    <div className="absolute bottom-full mb-2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/90 text-white text-xs py-1 px-2 rounded pointer-events-none whitespace-nowrap z-10">
-                                        {app.name}
-                                    </div>
-                                </motion.div>
-                            ))}
+                                return (
+                                    <motion.div
+                                        key={app.id}
+                                        initial={{ opacity: 0 }}
+                                        animate={{ opacity: 1 }}
+                                        exit={{ opacity: 0 }}
+                                        layout
+                                        className="aspect-square rounded-xl bg-white/25 backdrop-blur-sm border border-white/30 flex flex-col items-center justify-center p-3 gap-2 hover:shadow-lg hover:bg-white/30 transition-all cursor-pointer relative group"
+                                    >
+                                        {/* Connection status indicator */}
+                                        {!isChecking && (
+                                            <div className="absolute top-1 left-1 z-10">
+                                                {isConnected ? (
+                                                    <CheckCircle className="w-5 h-5 text-green-400" title="Connected" />
+                                                ) : (
+                                                    <AlertCircle className="w-5 h-5 text-orange-400" title="Not connected" />
+                                                )}
+                                            </div>
+                                        )}
+
+                                        <img
+                                            src={app.logo}
+                                            alt={app.name}
+                                            className="w-full h-full object-contain pointer-events-none"
+                                            onError={(e) => {
+                                                e.target.style.display = 'none';
+                                                e.target.nextSibling.style.display = 'flex';
+                                            }}
+                                        />
+                                        <div className="w-full h-full items-center justify-center text-gray-600 font-bold text-lg hidden pointer-events-none">
+                                            {app.name?.charAt(0) || '?'}
+                                        </div>
+
+                                        {/* Connect button for disconnected apps (with authUrl, error, or custom modal requirement) */}
+                                        {!isConnected && !isChecking && (hasAuthUrl || hasError || requiresCustomModal) && (
+                                            <button
+                                                onClick={(e) => handleConnect(e, app)}
+                                                className="absolute bottom-1 left-1 right-1 py-1 px-2 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-lg flex items-center justify-center gap-1 transition-colors shadow-lg z-20"
+                                                title={requiresCustomModal ? "Click to configure credentials" : (hasError ? "Click to configure" : "Click to authenticate")}
+                                            >
+                                                <Link className="w-3 h-3" />
+                                                {requiresCustomModal ? 'Configure' : (hasError ? 'Configure' : 'Connect')}
+                                            </button>
+                                        )}
+
+                                        {/* Remove button on hover */}
+                                        {onRemove && (
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    onRemove(app.id);
+                                                }}
+                                                className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg z-20"
+                                                title={`Remove ${app.name}`}
+                                            >
+                                                <X className="w-4 h-4 text-white" />
+                                            </button>
+                                        )}
+
+                                        {/* Tooltip on hover in dropzone too */}
+                                        <div className="absolute bottom-full mb-2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/90 text-white text-xs py-1 px-2 rounded pointer-events-none whitespace-nowrap z-10">
+                                            {app.name}
+                                        </div>
+                                    </motion.div>
+                                );
+                            })}
                         </AnimatePresence>
                     </div>
                 )}

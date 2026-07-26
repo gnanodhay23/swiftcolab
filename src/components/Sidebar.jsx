@@ -28,7 +28,18 @@ const Sidebar = ({ title, apps, side, onDragStart, showAddButton, onAppHover, on
                             whileTap={{ scale: 0.95 }}
                             className="w-12 h-12 md:w-16 md:h-16 rounded-xl bg-white cursor-grab active:cursor-grabbing flex items-center justify-center p-2 shadow-lg hover:shadow-xl transition-shadow"
                         >
-                            <img src={app.logo} alt={app.name} className="w-full h-full object-contain pointer-events-none" />
+                            <img
+                                src={app.logo}
+                                alt={app.name}
+                                className="w-full h-full object-contain pointer-events-none"
+                                onError={(e) => {
+                                    e.target.style.display = 'none';
+                                    e.target.nextSibling.style.display = 'flex';
+                                }}
+                            />
+                            <div className="w-full h-full items-center justify-center text-gray-600 font-bold text-sm hidden pointer-events-none">
+                                {app.name?.charAt(0) || '?'}
+                            </div>
                         </motion.div>
                     </div>
                 ))}

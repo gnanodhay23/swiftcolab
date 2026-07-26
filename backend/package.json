@@ -1,0 +1,40 @@
+{
+  "name": "swiftcolab-backend",
+  "version": "1.0.0",
+  "description": "SwiftColab backend - AI-powered multi-app orchestration",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "db:init": "node -e \"require('./db').initializeDatabase().then(() => process.exit(0))\""
+  },
+  "dependencies": {
+    "@composio/core": "^0.2.6",
+    "@slack/web-api": "^7.12.0",
+    "@temporalio/activity": "^1.13.2",
+    "@temporalio/client": "^1.13.2",
+    "@temporalio/worker": "^1.13.2",
+    "@temporalio/workflow": "^1.13.2",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "googleapis": "^140.0.0",
+    "ioredis": "^5.8.2",
+    "jsonwebtoken": "^9.0.2",
+    "node-cron": "^4.2.1",
+    "node-fetch": "^2.6.7",
+    "pg": "^8.11.3",
+    "playwright": "^1.56.1",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
