@@ -1,6 +1,7 @@
 // Database connection using pg (PostgreSQL)
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+require('dotenv').config({ path: path.join(__dirname, '..', '.env.local'), override: true });
 
 // Allow self-signed certificates for Supabase pooler connections
 if (process.env.NODE_ENV !== 'production') {
@@ -20,8 +21,13 @@ if (!connectionString) {
   console.warn('[DB] DATABASE_URL not set. Backend will run without DB.');
 }
 
-// Derive SSL mode; Supabase needs require with no CA by default
-const sslConfig = { rejectUnauthorized: false, require: true };
+// Cloud PostgreSQL providers generally require SSL; local development does not.
+let databaseHost = '';
+try {
+  databaseHost = new URL(connectionString).hostname;
+} catch {}
+const isLocalDatabase = ['localhost', '127.0.0.1', '::1'].includes(databaseHost);
+const sslConfig = isLocalDatabase ? false : { rejectUnauthorized: false, require: true };
 
 // Connection string format: postgresql://user:password@host:port/database
 const pool = connectionString
