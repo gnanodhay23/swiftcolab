@@ -242,10 +242,10 @@ const ACTION_ALLOWLIST = {
         },
       },
     },
-    GMAIL_REPLY_TO_EMAIL: {
+    GMAIL_REPLY_TO_THREAD: {
       enabled: true,
       provider: 'composio',
-      composio_action: 'GMAIL_REPLY_TO_EMAIL',
+      composio_action: 'GMAIL_REPLY_TO_THREAD',
       category: 'email',
       mutating: true,
       irreversible: true,
@@ -914,6 +914,15 @@ const ALIAS_MAP = {
       until: null,
       reason: 'FETCH supports search via query param',
       breaking_change: false,
+    },
+    GMAIL_REPLY_TO_EMAIL: {
+      canonical: 'GMAIL_REPLY_TO_THREAD',
+      type: 'deprecated',
+      since: '2026-10-25',
+      until: null,
+      reason: 'Installed Composio Gmail toolkit uses REPLY_TO_THREAD',
+      breaking_change: false,
+      migration_notes: 'Provide thread_id, recipient_email, and message_body.',
     },
 
     // Slack aliases

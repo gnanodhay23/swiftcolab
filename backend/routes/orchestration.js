@@ -8,6 +8,7 @@
 const express = require("express");
 const { APP_TO_COMPOSIO_TOOLKIT } = require("../composioService");
 const { frappeConnectionManager } = require("../integrations/frappe");
+const { requireOrganization } = require('../middleware/organization');
 
 function normalizeSelectedToolkits({ selectedApps, selectedToolkits, appsQuery }) {
   if (Array.isArray(selectedToolkits) && selectedToolkits.length > 0) return selectedToolkits;
@@ -61,8 +62,8 @@ function initOrchestrationRoutes(assistantOrchestrator, authenticateToken, optio
         userResponse,
       } = req.body || {};
 
-      const userId = req.user?.userId;
-      const entityId = userId ? `user_${userId}` : "default";
+      const userId = req.user.userId;
+      const entityId = `org_${req.organization.organization_id}`;
 
       const normalizedToolkits = normalizeSelectedToolkits({ selectedApps, selectedToolkits });
       if (normalizedToolkits.length === 0) {
@@ -91,8 +92,8 @@ function initOrchestrationRoutes(assistantOrchestrator, authenticateToken, optio
     }
   }
 
-  router.post("/assistant", optionalAuth, handleAssistant);
-  router.post("/unified", optionalAuth, handleAssistant);
+  router.post("/assistant", authenticateToken, requireOrganization(), handleAssistant);
+  router.post("/unified", authenticateToken, requireOrganization(), handleAssistant);
 
   // ---------------------------------------------------------------------------
   // Automation routes (AutomationEngine)
@@ -387,11 +388,11 @@ function initOrchestrationRoutes(assistantOrchestrator, authenticateToken, optio
   // App Connection Status (OAuth)
   // ---------------------------------------------------------------------------
 
-  router.post("/connection-status", optionalAuth, async (req, res) => {
+  router.post("/connection-status", authenticateToken, requireOrganization(), async (req, res) => {
     try {
       const { appIds } = req.body || {};
-      const userId = req.user?.userId;
-      const entityId = userId ? `user_${userId}` : "default";
+      const userId = req.user.userId;
+      const entityId = `org_${req.organization.organization_id}`;
 
       if (!Array.isArray(appIds) || appIds.length === 0) {
         return res.json({ connections: {} });
@@ -485,7 +486,7 @@ function initOrchestrationRoutes(assistantOrchestrator, authenticateToken, optio
   // ---------------------------------------------------------------------------
 
   // Get required auth fields for a toolkit
-  router.get("/auth-config/fields/:toolkit", optionalAuth, async (req, res) => {
+  router.get("/auth-config/fields/:toolkit", authenticateToken, requireOrganization(), async (req, res) => {
     try {
       const { toolkit } = req.params;
 
@@ -534,7 +535,7 @@ function initOrchestrationRoutes(assistantOrchestrator, authenticateToken, optio
 
   // Create auth config for a toolkit (for API_KEY auth)
   // Supports both api_key and api_secret for apps like Frappe
-  router.post("/auth-config/create", optionalAuth, async (req, res) => {
+  router.post("/auth-config/create", authenticateToken, requireOrganization(['owner', 'admin']), async (req, res) => {
     try {
       const { toolkit, credentials, name } = req.body || {};
 
@@ -592,11 +593,11 @@ function initOrchestrationRoutes(assistantOrchestrator, authenticateToken, optio
   });
 
   // Initiate connection for a toolkit
-  router.post("/connections/initiate", optionalAuth, async (req, res) => {
+  router.post("/connections/initiate", authenticateToken, requireOrganization(['owner', 'admin']), async (req, res) => {
     try {
       const { appId, redirectUrl, connectionParams } = req.body || {};
-      const userId = req.user?.userId;
-      const entityId = userId ? `user_${userId}` : "default";
+      const userId = req.user.userId;
+      const entityId = `org_${req.organization.organization_id}`;
 
       if (!appId) {
         return res.status(400).json({ error: "appId is required" });
@@ -645,7 +646,7 @@ function initOrchestrationRoutes(assistantOrchestrator, authenticateToken, optio
   });
 
   // Check connection status by ID
-  router.get("/connections/check/:connectionId", optionalAuth, async (req, res) => {
+  router.get("/connections/check/:connectionId", authenticateToken, requireOrganization(), async (req, res) => {
     try {
       const { connectionId } = req.params;
 
@@ -667,7 +668,7 @@ function initOrchestrationRoutes(assistantOrchestrator, authenticateToken, optio
   });
 
   // Get required connection fields for a toolkit (like subdomain for Jira)
-  router.get("/connections/fields/:toolkit", optionalAuth, async (req, res) => {
+  router.get("/connections/fields/:toolkit", authenticateToken, requireOrganization(), async (req, res) => {
     try {
       const { toolkit } = req.params;
 

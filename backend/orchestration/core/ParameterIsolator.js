@@ -54,6 +54,10 @@ const ACTION_PARAMS = {
     'message_id', 'messageId', 'thread_id', 'threadId',
     'body', 'html_body', 'attachments',
   ],
+  'GMAIL_REPLY_TO_THREAD': [
+    'thread_id', 'threadId', 'recipient_email', 'to', 'message_body', 'body',
+    'cc', 'bcc', 'extra_recipients', 'is_html', 'user_id',
+  ],
   'GMAIL_CREATE_DRAFT': [
     'to', 'cc', 'bcc', 'subject', 'body', 'html_body',
   ],

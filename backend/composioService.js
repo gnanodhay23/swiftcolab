@@ -73,6 +73,11 @@ const COMPOSIO_TOOLKIT_TO_APP = Object.entries(APP_TO_COMPOSIO_TOOLKIT).reduce(
   {}
 );
 
+// The Composio SDK returns tools in OpenAI-function format
+// ({ type: 'function', function: { name, description, parameters } }).
+// Keep compatibility with direct tool objects used by older SDK responses.
+const unwrapToolDefinition = (tool) => tool?.function || tool;
+
 // =============================================================================
 // CACHE CONFIGURATION
 // =============================================================================
@@ -222,14 +227,17 @@ class ComposioService {
         limit: 5000,
       });
 
-      const actions = (tools || []).map(tool => ({
-        name: tool.name,
-        description: tool.description || '',
-        toolkit: toolkit,
-        tags: tool.tags || [],
-        // Indicate if it's a read or write operation
-        operationType: this._inferOperationType(tool.name),
-      }));
+      const actions = (tools || []).map(rawTool => {
+        const tool = unwrapToolDefinition(rawTool);
+        return {
+          name: tool?.name,
+          description: tool?.description || '',
+          toolkit: toolkit,
+          tags: tool?.tags || [],
+          // Indicate if it's a read or write operation
+          operationType: this._inferOperationType(tool?.name || ''),
+        };
+      });
 
       // Cache the result
       this._setCache(this._cache.appActions, toolkit, actions);
@@ -275,7 +283,9 @@ class ComposioService {
         limit: 5000,
       });
 
-      const tool = tools?.find(t => t.name === actionName);
+      const tool = tools
+        ?.map(unwrapToolDefinition)
+        .find(t => t?.name === actionName);
 
       if (!tool) {
         console.error(`[Composio] Action not found: ${actionName}`);
@@ -546,7 +556,7 @@ Examples:
         toolkits,
         limit: 5000,
       });
-      return tools;
+      return tools.map(unwrapToolDefinition);
     } catch (error) {
       console.error("Error fetching Composio tools:", error);
       throw error;
@@ -863,37 +873,87 @@ Please provide a brief, friendly summary of what was done.`,
       if (effectiveRedirectUrl) console.log(`[Composio] Redirect URL: ${effectiveRedirectUrl}`);
       console.log(`[Composio] Connection params:`, effectiveConnectionParams);
 
-      // ALWAYS use the auth config from the project to ensure custom branding is applied
-      // This ensures the Auth Screen Configuration (logo, app name) from Composio dashboard is used
+      // Prefer Composio-managed / OAuth auth configs. Never use an API_KEY
+      // config on this path — that is a separate user-selected connect method.
       const configs = await this.composio.authConfigs.list();
-      const authConfig = configs.items?.find(c => c.toolkit?.slug?.toLowerCase() === toolkit.toLowerCase());
+      const matching = (configs.items || []).filter(
+        (c) => c.toolkit?.slug?.toLowerCase() === toolkit.toLowerCase()
+      );
+      const authConfig =
+        matching.find((c) => c.isComposioManaged) ||
+        matching.find((c) => {
+          const scheme = String(c.authScheme || c.auth_scheme || c.type || "").toUpperCase();
+          return scheme.includes("OAUTH");
+        }) ||
+        matching.find((c) => {
+          const scheme = String(c.authScheme || c.auth_scheme || c.type || "").toUpperCase();
+          return scheme !== "API_KEY";
+        });
 
       if (authConfig) {
         console.log(`[Composio] Using auth config: ${authConfig.id} for ${toolkit} (custom branding enabled)`);
 
-        // Use connectedAccounts.initiate() which uses the project's Auth Screen branding (Connect Link flow)
-        // This is the correct method for custom branding per Composio docs
-        const connectionRequest = await this.composio.connectedAccounts.initiate(
-          effectiveEntityId,       // userId
-          authConfig.id,           // authConfigId - links to project's branding settings
-          {
-            data: effectiveConnectionParams || {},  // Pass any connection params (subdomain, etc.)
-            allowMultiple: true,           // Allow multiple connected accounts per user
+        // Composio-managed OAuth configurations must use the Connect Link endpoint.
+        // The previous `initiate()` endpoint has been retired for that auth type.
+        // Custom OAuth and non-OAuth configs retain the legacy initiate flow because
+        // they can require pre-filled connection data.
+        let connectionRequest;
+        const linkOptions = effectiveRedirectUrl
+          ? { callbackUrl: effectiveRedirectUrl }
+          : undefined;
+
+        if (authConfig.isComposioManaged !== false) {
+          try {
+            connectionRequest = await this.composio.connectedAccounts.link(
+              effectiveEntityId,
+              authConfig.id,
+              linkOptions
+            );
+          } catch (linkError) {
+            if (authConfig.isComposioManaged) {
+              throw linkError;
+            }
+            connectionRequest = await this.composio.connectedAccounts.initiate(
+              effectiveEntityId,
+              authConfig.id,
+              {
+                data: effectiveConnectionParams || {},
+                allowMultiple: true,
+              }
+            );
           }
-        );
+        } else {
+          try {
+            connectionRequest = await this.composio.connectedAccounts.initiate(
+              effectiveEntityId,
+              authConfig.id,
+              {
+                data: effectiveConnectionParams || {},
+                allowMultiple: true,
+              }
+            );
+          } catch (error) {
+            // Older SDK responses may not expose isComposioManaged. Retry only
+            // the documented retired-endpoint error with the supported link flow.
+            if (!error.message?.includes('Composio-managed OAuth auth configs is no longer supported')) {
+              throw error;
+            }
+
+            connectionRequest = await this.composio.connectedAccounts.link(
+              effectiveEntityId,
+              authConfig.id,
+              linkOptions
+            );
+          }
+        }
 
         console.log(`[Composio] Connection request created (Connect Link):`, connectionRequest);
 
-        return {
-          connectionId: connectionRequest.id,
-          redirectUrl: connectionRequest.redirectUrl,
-          status: connectionRequest.status,
-          _connectionRequest: connectionRequest,
-        };
+        return this._formatConnectionRequest(connectionRequest);
       }
 
-      // Fallback: No auth config found - use toolkits.authorize (won't have custom branding)
-      console.warn(`[Composio] No auth config found for ${toolkit}, falling back to default (no custom branding)`);
+      // Fallback: No OAuth auth config found - use toolkits.authorize (won't have custom branding)
+      console.warn(`[Composio] No OAuth auth config found for ${toolkit}, falling back to default (no custom branding)`);
 
       const connectionRequest = await this.composio.toolkits.authorize(
         effectiveEntityId,
@@ -902,12 +962,7 @@ Please provide a brief, friendly summary of what was done.`,
 
       console.log(`[Composio] Connection request created:`, connectionRequest);
 
-      return {
-        connectionId: connectionRequest.id,
-        redirectUrl: connectionRequest.redirectUrl,
-        status: connectionRequest.status,
-        _connectionRequest: connectionRequest,
-      };
+      return this._formatConnectionRequest(connectionRequest);
     } catch (error) {
       console.error(`[Composio] Connection initiation error for ${appIdOrToolkit}:`, error);
 
@@ -927,6 +982,26 @@ Please provide a brief, friendly summary of what was done.`,
 
       throw error;
     }
+  }
+
+  /**
+   * Normalize Composio connect-link / authorize responses.
+   * Different SDK versions expose the sign-in URL under different keys.
+   */
+  _formatConnectionRequest(connectionRequest) {
+    const redirectUrl =
+      connectionRequest?.redirectUrl ||
+      connectionRequest?.redirect_url ||
+      connectionRequest?.url ||
+      connectionRequest?.link ||
+      null;
+
+    return {
+      connectionId: connectionRequest?.id || connectionRequest?.connectionId || null,
+      redirectUrl,
+      status: connectionRequest?.status,
+      _connectionRequest: connectionRequest,
+    };
   }
 
   /**
@@ -1028,6 +1103,21 @@ Please provide a brief, friendly summary of what was done.`,
       }
     }
 
+    // Gmail reply-to-thread expects message_body and recipient_email. Preserve
+    // familiar aliases used by the planner while sending Composio's schema.
+    if (actionName === 'GMAIL_REPLY_TO_THREAD') {
+      if (normalized.body && !normalized.message_body) {
+        normalized.message_body = normalized.body;
+        delete normalized.body;
+      }
+      if (normalized.to && !normalized.recipient_email) {
+        normalized.recipient_email = Array.isArray(normalized.to)
+          ? normalized.to[0]
+          : normalized.to;
+        delete normalized.to;
+      }
+    }
+
     return normalized;
   }
 
@@ -1046,6 +1136,55 @@ Please provide a brief, friendly summary of what was done.`,
     // Normalize parameters for this action
     const normalizedParams = this._normalizeParams(actionName, params);
     console.log(`[Composio] executeAction params (after normalization):`, JSON.stringify(normalizedParams, null, 2));
+
+    // Never issue a side-effecting Gmail call with an incomplete message. This
+    // avoids an opaque provider error and makes the missing user input clear.
+    if (actionName === 'GMAIL_SEND_EMAIL') {
+      const hasRecipient = Boolean(
+        normalizedParams?.recipient_email ||
+        normalizedParams?.to ||
+        normalizedParams?.cc?.length ||
+        normalizedParams?.bcc?.length
+      );
+      const hasContent = Boolean(normalizedParams?.subject || normalizedParams?.body);
+
+      if (!hasRecipient || !hasContent) {
+        const missing = [
+          !hasRecipient && 'a recipient',
+          !hasContent && 'a subject or message body',
+        ].filter(Boolean).join(' and ');
+
+        return {
+          success: false,
+          data: null,
+          error: `Gmail send requires ${missing}.`,
+          actionName,
+          entityId: effectiveEntityId,
+          needsInfo: true,
+        };
+      }
+    }
+
+    if (actionName === 'GMAIL_REPLY_TO_THREAD') {
+      const threadId = normalizedParams?.thread_id || normalizedParams?.threadId;
+      const looksLikePlaceholder = !threadId || /reply\s+to\s+thread|thread[_\s-]*id/i.test(String(threadId));
+      const missing = [
+        looksLikePlaceholder && 'a valid email thread',
+        !normalizedParams?.recipient_email && 'the recipient email address',
+        !normalizedParams?.message_body && 'the reply message',
+      ].filter(Boolean);
+
+      if (missing.length > 0) {
+        return {
+          success: false,
+          data: null,
+          error: `Gmail reply requires ${missing.join(', ')}. First select or fetch the email you want to reply to.`,
+          actionName,
+          entityId: effectiveEntityId,
+          needsInfo: true,
+        };
+      }
+    }
 
     try {
       // Validate action exists (optional, uses cache)

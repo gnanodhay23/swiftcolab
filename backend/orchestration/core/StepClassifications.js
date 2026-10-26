@@ -144,7 +144,7 @@ const STEP_CLASSIFICATIONS = {
     risk_factors: ['implicit_read_status'],
   },
 
-  GMAIL_REPLY_TO_EMAIL: {
+  GMAIL_REPLY_TO_THREAD: {
     reversibility: REVERSIBILITY.IRREVERSIBLE,
     reversal_action: null,
     reversal_complexity: REVERSAL_COMPLEXITY.IMPOSSIBLE,

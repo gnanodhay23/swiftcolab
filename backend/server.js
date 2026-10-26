@@ -54,6 +54,10 @@ const { initializeClient: initTemporalClient, isConnected: isTemporalConnected }
 const authRoutes = require('./routes/auth');
 const workspaceRoutes = require('./routes/workspace');
 const frappeRoutes = require('./routes/frappe');
+const organizationRoutes = require('./routes/organizations');
+const interviewSchedulingRoutes = require('./routes/interviewScheduling');
+const googleWorkspaceRoutes = require('./routes/googleWorkspace');
+const { startAutomaticInterviewSchedulingJob, stopAutomaticInterviewSchedulingJob } = require('./jobs/automaticInterviewSchedulingJob');
 const { initOrchestrationRoutes } = require('./routes/orchestration');
 
 // -----------------------------------------------------------------------------
@@ -68,42 +72,181 @@ const { sanitizeBody } = require('./middleware/validation');
 const PORT = process.env.PORT || 3001;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 const COMPOSIO_API_KEY = process.env.COMPOSIO_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const AI_PROVIDER = (process.env.AI_PROVIDER || 'auto').toLowerCase();
 const TEMPORAL_ADDRESS = process.env.TEMPORAL_ADDRESS || '127.0.0.1:7233';
 
 // -----------------------------------------------------------------------------
-// Gemini API Helper (Used by ToolRouter, SlotFiller, and Engines)
+// OpenAI API helper (injected into ToolRouter, SlotFiller, and Engines).
+// The function name is retained below at injection sites for compatibility
+// with the existing orchestration component interfaces.
 // -----------------------------------------------------------------------------
-async function callGemini(systemPrompt, userPrompt, temperature = 0.1) {
-  if (!GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY not configured');
+async function callOpenAI(systemPrompt, userPrompt, temperature = 0.1) {
+  if (!OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY not configured');
   }
 
+  const maxAttempts = 3;
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch(
+        'https://api.openai.com/v1/responses',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${OPENAI_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4.1-mini',
+            instructions: systemPrompt,
+            input: userPrompt,
+          }),
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        return data.output_text || '';
+      }
+
+      const error = await response.text();
+      lastError = new Error(`Gemini API error: ${response.status} - ${error}`);
+      const isQuotaExhausted = response.status === 429 &&
+        /quota exceeded|insufficient_quota/i.test(error);
+      const isTransient = [500, 502, 503, 504].includes(response.status) ||
+        (response.status === 429 && !isQuotaExhausted);
+
+      if (!isTransient || attempt === maxAttempts) {
+        lastError.nonRetryable = !isTransient;
+        throw lastError;
+      }
+
+      const delayMs = 1000 * (2 ** (attempt - 1));
+      console.warn(`[OpenAI] Request failed with ${response.status}; retrying in ${delayMs}ms (attempt ${attempt}/${maxAttempts})`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    } catch (error) {
+      lastError = error;
+      if (error.nonRetryable || attempt === maxAttempts) {
+        throw error;
+      }
+
+      // Network errors are also normally temporary. HTTP errors that should
+      // not be retried are thrown above before reaching this branch.
+      const delayMs = 1000 * (2 ** (attempt - 1));
+      console.warn(`[OpenAI] Request error; retrying in ${delayMs}ms (attempt ${attempt}/${maxAttempts}): ${error.message}`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+
+  throw lastError;
+}
+
+async function callGoogleGemini(systemPrompt, userPrompt) {
+  if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
+
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [
-          { role: 'user', parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] },
-        ],
-        generationConfig: {
-          temperature,
-          topP: 0.95,
-          maxOutputTokens: 8192,
-        },
+        contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
+        generationConfig: { maxOutputTokens: 8192 },
       }),
     }
   );
 
+  if (!response.ok) throw new Error(`Gemini API error: ${response.status} - ${await response.text()}`);
+  const data = await response.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+async function callOpenRouter(systemPrompt, userPrompt, temperature = 0.1) {
+  if (!OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY not configured');
+
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      'HTTP-Referer': FRONTEND_URL,
+      'X-Title': 'SwiftCollab',
+    },
+    body: JSON.stringify({
+      model: 'openrouter/free',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature,
+      max_tokens: 8192,
+    }),
+  });
+
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Gemini API error: ${response.status} - ${error}`);
+    throw new Error(`OpenRouter API error: ${response.status} - ${await response.text()}`);
   }
 
   const data = await response.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const choice = data.choices?.[0];
+  const content = choice?.message?.content ?? choice?.text;
+  const outputText = typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? content.map(part => part.text || part.content || '').join('')
+      : '';
+  if (!outputText) {
+    const finishReason = choice?.finish_reason || 'unknown';
+    throw new Error(`OpenRouter returned no text output (finish reason: ${finishReason})`);
+  }
+  return outputText;
+}
+
+// Existing orchestration components consume this callback under the legacy
+// `callGemini` name; the implementation now selects a provider at runtime.
+async function callGemini(systemPrompt, userPrompt, temperature = 0.1) {
+  const hasOpenAI = Boolean(OPENAI_API_KEY);
+  const hasGemini = Boolean(GEMINI_API_KEY);
+  const hasOpenRouter = Boolean(OPENROUTER_API_KEY);
+
+  if (AI_PROVIDER === 'openai') return callOpenAI(systemPrompt, userPrompt, temperature);
+  if (AI_PROVIDER === 'gemini') return callGoogleGemini(systemPrompt, userPrompt);
+  if (AI_PROVIDER === 'openrouter') return callOpenRouter(systemPrompt, userPrompt, temperature);
+  if (AI_PROVIDER !== 'auto') throw new Error(`Unsupported AI_PROVIDER: ${AI_PROVIDER}. Use auto, openai, gemini, or openrouter.`);
+
+  const providerErrors = [];
+  const providers = [
+    hasOpenAI && { name: 'OpenAI', call: () => callOpenAI(systemPrompt, userPrompt, temperature) },
+    hasGemini && { name: 'Gemini', call: () => callGoogleGemini(systemPrompt, userPrompt) },
+    hasOpenRouter && { name: 'OpenRouter', call: () => callOpenRouter(systemPrompt, userPrompt, temperature) },
+  ].filter(Boolean);
+
+  for (const provider of providers) {
+    try {
+      return await provider.call();
+    } catch (error) {
+      providerErrors.push({ name: provider.name, error });
+      console.warn(`[AI] ${provider.name} failed; trying the next configured provider: ${error.message}`);
+    }
+  }
+
+  if (providerErrors.length === 0) {
+    throw new Error('No AI provider configured. Set OPENAI_API_KEY, GEMINI_API_KEY, and/or OPENROUTER_API_KEY.');
+  }
+
+  const allExhausted = providerErrors.every(({ error }) =>
+    /quota exceeded|daily limit exceeded|resource_exhausted|insufficient_quota/i.test(error.message)
+  );
+  if (allExhausted) {
+    throw new Error('All configured AI providers are exhausted. Add quota or billing, then retry.');
+  }
+
+  throw new Error(`All configured AI providers failed: ${providerErrors.map(({ name, error }) => `${name}: ${error.message}`).join(' | ')}`);
 }
 
 // -----------------------------------------------------------------------------
@@ -138,7 +281,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Organization-Id'],
 }));
 
 // Body parsing
@@ -241,6 +384,9 @@ app.get('/api/health/detailed', authenticateToken, async (_req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/workspace', workspaceRoutes);
 app.use('/api/frappe', frappeRoutes);
+app.use('/api/organizations', organizationRoutes);
+app.use('/api/interview-scheduling', interviewSchedulingRoutes);
+app.use('/api/integrations/google', googleWorkspaceRoutes);
 
 // -----------------------------------------------------------------------------
 // Bootstrap Orchestration Stack
@@ -320,7 +466,11 @@ async function bootstrapOrchestration() {
   });
 
   // 4d. AssistantOrchestrator - Main entry point
-  const redisClient = redis.getClient();
+  // A configured Redis client can still be disconnected (for example after a
+  // failed Redis Cloud connection). Do not pass that client to the
+  // orchestrator: ioredis throws "Connection is closed" on session locks.
+  // Use the in-memory implementation until Redis is actually ready.
+  const redisClient = redis.isAvailable() ? redis.getClient() : null;
   if (!redisClient) {
     console.warn('      Redis not available - sessions will not persist');
   }
@@ -465,12 +615,14 @@ async function main() {
       console.log(`[Server] Frontend URL: ${FRONTEND_URL}`);
       console.log(`[Server] API Base: http://localhost:${PORT}/api\n`);
     });
+    startAutomaticInterviewSchedulingJob();
 
     // Graceful shutdown
     const shutdown = async (signal) => {
       console.log(`\n[Server] Received ${signal}, shutting down gracefully...`);
 
       // Stop accepting new connections
+      stopAutomaticInterviewSchedulingJob();
       server.close(() => {
         console.log('[Server] HTTP server closed');
       });

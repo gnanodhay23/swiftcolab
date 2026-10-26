@@ -311,7 +311,8 @@ class ActionResultFormatter {
             GMAIL_LIST_MESSAGES: this._fmtGmailList.bind(this), // Alternative name
             GMAIL_GET_EMAIL: this._fmtGmailGet.bind(this),
             GMAIL_SEND_EMAIL: this._fmtGmailSend.bind(this),
-            GMAIL_REPLY_TO_EMAIL: this._fmtGmailReply.bind(this),
+            GMAIL_REPLY_TO_THREAD: this._fmtGmailReply.bind(this),
+            GMAIL_REPLY_TO_EMAIL: this._fmtGmailReply.bind(this), // Legacy alias
 
             // Calendar
             GOOGLECALENDAR_EVENTS_LIST: this._fmtCalendarList.bind(this),

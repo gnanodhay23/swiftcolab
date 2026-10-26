@@ -651,7 +651,7 @@ class ExecutorV2 {
     if (!Array.isArray(tools) || tools.length === 0) throw new Error("tools[] required");
     const steps = this._toolChainToSteps(tools);
     const plan = {
-      id: options.planId || `toolchain_${Date.now()}_${uuidv4().slice(0, 8)}`,
+      id: options.planId || uuidv4(),
       intent: "TOOL_CHAIN",
       type: "multi_step_workflow",
       steps: steps,
@@ -730,7 +730,7 @@ class ExecutorV2 {
     if (!intentGraph || !Array.isArray(intentGraph.actions)) throw new Error("intentGraph.actions required");
     const steps = this._intentGraphToSteps(intentGraph.actions);
     const plan = {
-      id: options.planId || `intentgraph_${Date.now()}_${uuidv4().slice(0, 8)}`,
+      id: options.planId || uuidv4(),
       intent: intentGraph.reasoning || "INTENT_GRAPH",
       type: "multi_step_workflow",
       steps: steps,
@@ -758,7 +758,7 @@ class ExecutorV2 {
       },
     ];
     const plan = {
-      id: options.planId || `single_${Date.now()}_${uuidv4().slice(0, 8)}`,
+      id: options.planId || uuidv4(),
       intent: "SINGLE_ACTION",
       type: "single_action",
       steps: steps,

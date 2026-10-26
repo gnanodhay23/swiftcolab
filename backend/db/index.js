@@ -20,8 +20,10 @@ if (!connectionString) {
   console.warn('[DB] DATABASE_URL not set. Backend will run without DB.');
 }
 
-// Derive SSL mode; Supabase needs require with no CA by default
-const sslConfig = { rejectUnauthorized: false, require: true };
+// Changes made to connect to my local posgressql db
+const sslConfig = process.env.DB_SSL === 'true'
+  ? { rejectUnauthorized: false }
+  : false;
 
 // Connection string format: postgresql://user:password@host:port/database
 const pool = connectionString

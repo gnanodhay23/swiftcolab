@@ -715,7 +715,8 @@ Extract email addresses. "yes with email@test.com" = approval with updates.`;
         entityId: context.entityId,
         conversationId: context.conversationId,
         options: {
-          planId: `toolchain_${sess.sessionId}_${Date.now()}`,
+          // execution_plans.id is a PostgreSQL UUID column.
+          planId: crypto.randomUUID(),
           userTimeZone: context.userTimeZone,
         },
         onProgress,

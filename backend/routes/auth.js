@@ -12,17 +12,18 @@ const {
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
   try {
-    const { email, password, name } = req.body;
+    const { email, password, name, invitationToken } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    const result = await authService.register({ email, password, name });
+    const result = await authService.register({ email, password, name, invitationToken });
 
     res.status(201).json({
       message: 'Registration successful',
       user: result.user,
+      organization: result.organization,
     });
   } catch (error) {
     console.error('[Auth] Registration error:', error.message);

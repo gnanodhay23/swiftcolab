@@ -2,7 +2,12 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { query } = require('../db');
+const { query, getClient } = require('../db');
+const {
+  createOrganizationWithOwner,
+  getInvitationForToken,
+  acceptInvitation,
+} = require('./organizationService');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-change-in-production';
 const JWT_EXPIRES_IN = '15m'; // Access token expires in 15 minutes
@@ -48,43 +53,63 @@ class AuthService {
   }
 
   // Register new user
-  async register({ email, password, name }) {
-    // Check if user already exists
-    const existingUser = await query(
-      'SELECT id FROM users WHERE email = $1',
-      [email.toLowerCase()]
-    );
-
-    if (existingUser.rows.length > 0) {
-      throw new Error('User with this email already exists');
-    }
-
+  async register({ email, password, name, invitationToken = null }) {
     // Validate password strength
     if (password.length < 8) {
       throw new Error('Password must be at least 8 characters long');
     }
 
-    // Hash password
     const passwordHash = await this.hashPassword(password);
-
-    // Generate verification token
     const verificationToken = crypto.randomBytes(32).toString('hex');
+    const client = await getClient();
+    let user;
+    let organization;
 
-    // Insert user
-    const result = await query(
-      `INSERT INTO users (email, password_hash, name, verification_token)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, email, name, created_at`,
-      [email.toLowerCase(), passwordHash, name, verificationToken]
-    );
+    try {
+      await client.query('BEGIN');
+      const existingUser = await client.query(
+        'SELECT id FROM users WHERE email = $1',
+        [email.toLowerCase()]
+      );
+      if (existingUser.rows.length > 0) {
+        throw new Error('User with this email already exists');
+      }
 
-    const user = result.rows[0];
+      let invitation = null;
+      if (invitationToken) {
+        invitation = await getInvitationForToken(invitationToken, email, client);
+        if (!invitation) throw new Error('Invitation is invalid, expired, or does not match this email');
+      }
 
-    // Create default settings
-    await query(
-      `INSERT INTO user_settings (user_id) VALUES ($1)`,
-      [user.id]
-    );
+      const result = await client.query(
+        `INSERT INTO users (email, password_hash, name, verification_token)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, email, name, created_at`,
+        [email.toLowerCase(), passwordHash, name, verificationToken]
+      );
+      user = result.rows[0];
+
+      await client.query('INSERT INTO user_settings (user_id) VALUES ($1)', [user.id]);
+      if (invitation) {
+        await acceptInvitation({ token: invitationToken, userId: user.id, email: user.email, client });
+        organization = {
+          id: invitation.organization_id,
+          name: invitation.organization_name,
+        };
+      } else {
+        organization = await createOrganizationWithOwner({
+          name: `${user.name || user.email.split('@')[0]} Workspace`,
+          ownerUserId: user.id,
+          client,
+        });
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
 
     // Log the action
     await this.logAuditEvent(user.id, 'USER_REGISTERED', { email: user.email });
@@ -95,6 +120,7 @@ class AuthService {
         email: user.email,
         name: user.name,
       },
+      organization,
       verificationToken,
     };
   }
